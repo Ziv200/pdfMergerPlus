@@ -38,20 +38,30 @@ class PageThumbnail(ctk.CTkFrame):
         self.has_note = False
         self.is_marked = False
 
-        # Thumbnail Label
+        # Configure layout for a horizontal "row-like" look in the vertical column
+        self.grid_columnconfigure(1, weight=1)
+
+        # Thumbnail Image
         self.img_label = ctk.CTkLabel(self, image=thumbnail_img, text="")
-        self.img_label.pack(padx=2, pady=2)
+        self.img_label.grid(row=0, column=0, padx=5, pady=5)
         
-        # Info Label (Page number)
-        self.info_label = ctk.CTkLabel(self, text=f"P{page_index + 1}", font=("Arial", 10))
-        self.info_label.pack()
+        # Details text (Filename and page)
+        filename = os.path.basename(file_path)
+        self.info_label = ctk.CTkLabel(self, text=f"{filename}\nPage {page_index + 1}", 
+                                      anchor="w", justify="left", font=("Arial", 11))
+        self.info_label.grid(row=0, column=1, padx=10, sticky="w")
 
         # Bindings
-        self.img_label.bind("<Button-1>", lambda e: self.on_click(self))
-        self.bind("<Button-1>", lambda e: self.on_click(self))
+        self._bind_recursive(self, "<Button-1>", lambda e: self.on_click(self))
         
-        # Drag bindings (conceptual simple implementation)
+        # Drag bindings
         self.img_label.bind("<B1-Motion>", self._on_drag)
+        self.bind("<B1-Motion>", self._on_drag)
+
+    def _bind_recursive(self, widget, event, callback):
+        widget.bind(event, callback)
+        for child in widget.winfo_children():
+            self._bind_recursive(child, event, callback)
 
     def _on_drag(self, event):
         self.on_drag_start(self, event)
@@ -151,18 +161,50 @@ class PDFMergerApp:
         self.detail_label = ctk.CTkLabel(self.detail_panel, text="Page Details", font=ctk.CTkFont(weight="bold"))
         self.detail_label.pack(pady=10)
 
-        self.preview_label = ctk.CTkLabel(self.detail_panel, text="Select a page", width=200, height=250, bg_color="gray30")
-        self.preview_label.pack(padx=10, pady=10)
+        # Detail Panel (Right Side - Now Annotation Area)
+        self.detail_panel = ctk.CTkFrame(self.root)
+        self.detail_panel.grid(row=0, column=2, padx=10, pady=10, sticky="nsew")
+        
+        # Tool Bar for Annotations
+        self.toolbar = ctk.CTkFrame(self.detail_panel)
+        self.toolbar.pack(fill="x", padx=5, pady=5)
+        
+        self.pen_btn = ctk.CTkButton(self.toolbar, text="Draw", width=60, command=self.set_pen_mode)
+        self.pen_btn.pack(side="left", padx=2)
+        
+        self.text_btn = ctk.CTkButton(self.toolbar, text="Type", width=60, command=self.set_text_mode, fg_color="transparent", border_width=1)
+        self.text_btn.pack(side="left", padx=2)
+        
+        self.clear_ann_btn = ctk.CTkButton(self.toolbar, text="Clear", width=60, fg_color="#d9534f", hover_color="#c9302c", command=self.clear_annotations)
+        self.clear_ann_btn.pack(side="right", padx=2)
 
-        self.note_text = ctk.CTkTextbox(self.detail_panel, height=100)
+        # Drawing Canvas
+        self.canvas_width = 400
+        self.canvas_height = 550
+        self.canvas = tk.Canvas(self.detail_panel, width=self.canvas_width, height=self.canvas_height, 
+                                bg="gray30", highlightthickness=0)
+        self.canvas.pack(padx=10, pady=10)
+        
+        self.canvas.bind("<Button-1>", self.on_canvas_click)
+        self.canvas.bind("<B1-Motion>", self.on_canvas_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_canvas_release)
+
+        # Legacy Notes box (optional, maybe keep as page description)
+        self.note_label = ctk.CTkLabel(self.detail_panel, text="Page Annotations Description:")
+        self.note_label.pack(fill="x", padx=10)
+        self.note_text = ctk.CTkTextbox(self.detail_panel, height=60)
         self.note_text.pack(fill="x", padx=10, pady=5)
-        # Note: <<Modified>> binding can be tricky with delete/insert. 
-        # For simplicity, we'll keep it or move to a more robust update mechanism later.
         self.note_text.bind("<<Modified>>", self.on_note_change)
 
         self.mark_var = tk.BooleanVar()
         self.mark_check = ctk.CTkCheckBox(self.detail_panel, text="Mark Page", variable=self.mark_var, command=self.on_mark_toggle)
-        self.mark_check.pack(pady=10)
+        self.mark_check.pack(pady=5)
+
+        # Annotation State
+        self.ann_mode = "pen" # "pen" or "text"
+        self.current_draw_path = []
+        self.last_x, self.last_y = None, None
+        self.active_image = None # Reference to keep current canvas image in memory
 
     def add_files(self):
         files = filedialog.askopenfilenames(filetypes=[
@@ -268,7 +310,8 @@ class PDFMergerApp:
                     'file': file_path,
                     'index': i,
                     'note': '',
-                    'marked': False
+                    'marked': False,
+                    'annotations': [] # List of {'type': 'pen', 'points': []} or {'type': 'text', 'pos': (x,y), 'content': ''}
                 })
             doc.close()
         except Exception as e:
@@ -296,7 +339,7 @@ class PDFMergerApp:
         for widget in self.scroll_frame.winfo_children():
             widget.destroy()
 
-        cols = 5
+        # Vertical layout: one column
         for i, page_info in enumerate(self.page_order):
             thumb_img = self.get_thumbnail(page_info['file'], page_info['index'])
             if not thumb_img: continue
@@ -309,7 +352,7 @@ class PDFMergerApp:
                 on_click=self.on_thumbnail_click,
                 on_drag_start=self.on_thumbnail_drag
             )
-            frame.grid(row=i // cols, column=i % cols, padx=5, pady=5)
+            frame.grid(row=i, column=0, padx=5, pady=2, sticky="ew")
             frame.set_status(bool(page_info['note']), page_info['marked'])
             
             # Store index in frame for reordering
@@ -325,17 +368,36 @@ class PDFMergerApp:
         # Update detail panel
         page_info = self.page_order[thumb_frame.current_pos]
         
-        # Load larger preview
+        # Load larger preview and draw on canvas
         try:
             doc = fitz.open(page_info['file'])
             page = doc[page_info['index']]
-            pix = page.get_pixmap(matrix=fitz.Matrix(0.5, 0.5))
+            
+            # Scale to fit canvas
+            zoom_x = self.canvas_width / page.rect.width
+            zoom_y = self.canvas_height / page.rect.height
+            zoom = min(zoom_x, zoom_y)
+            
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            ctk_preview = ctk.CTkImage(light_image=img, dark_image=img, size=(180, 240))
-            self.preview_label.configure(image=ctk_preview, text="")
+            
+            self.active_image = ImageTk.PhotoImage(img) # Keep reference
+            self.canvas.delete("all")
+            # Center image
+            self.canvas.create_image(self.canvas_width//2, self.canvas_height//2, image=self.active_image, anchor="center")
+            
+            # Store zoom for coordinate translation
+            self.current_zoom = zoom
+            self.img_offset_x = (self.canvas_width - pix.width) // 2
+            self.img_offset_y = (self.canvas_height - pix.height) // 2
+            
+            # Render existing annotations
+            self.render_annotations(page_info['annotations'])
+            
             doc.close()
-        except:
-            self.preview_label.configure(image=None, text="Error loading preview")
+        except Exception as e:
+            self.canvas.delete("all")
+            self.canvas.create_text(self.canvas_width//2, self.canvas_height//2, text=f"Error: {e}", fill="red")
 
         # Set note and mark
         self.note_text.edit_modified(False) # Reset before loading
@@ -343,6 +405,98 @@ class PDFMergerApp:
         self.note_text.insert("1.0", page_info['note'])
         self.note_text.edit_modified(False) # Reset after loading
         self.mark_var.set(page_info['marked'])
+
+    def render_annotations(self, annotations):
+        for ann in annotations:
+            if ann['type'] == 'pen':
+                points = ann['points']
+                if len(points) > 1:
+                    # Translate back to canvas coordinates
+                    c_points = []
+                    for x, y in points:
+                        c_points.append(x * self.current_zoom + self.img_offset_x)
+                        c_points.append(y * self.current_zoom + self.img_offset_y)
+                    self.canvas.create_line(c_points, fill="blue", width=2, capstyle=tk.ROUND, smooth=True)
+            elif ann['type'] == 'text':
+                x, y = ann['pos']
+                cx = x * self.current_zoom + self.img_offset_x
+                cy = y * self.current_zoom + self.img_offset_y
+                self.canvas.create_text(cx, cy, text=ann['content'], fill="red", font=("Arial", 14, "bold"))
+    
+    def set_pen_mode(self):
+        self.ann_mode = "pen"
+        self.pen_btn.configure(fg_color=["#3B8ED0", "#1F538D"]) # Active color
+        self.text_btn.configure(fg_color="transparent")
+
+    def set_text_mode(self):
+        self.ann_mode = "text"
+        self.text_btn.configure(fg_color=["#3B8ED0", "#1F538D"]) # Active color
+        self.pen_btn.configure(fg_color="transparent")
+
+    def clear_annotations(self):
+        if not self.selected_thumbnail: return
+        idx = self.selected_thumbnail.current_pos
+        if messagebox.askyesno("Clear", "Clear all drawings on this page?"):
+            self.page_order[idx]['annotations'] = []
+            self.on_thumbnail_click(self.selected_thumbnail) # Refresh
+
+    def on_canvas_click(self, event):
+        if not self.selected_thumbnail: return
+        
+        # Adjust for image offset and zoom to get PDF coordinates
+        pdf_x = (event.x - self.img_offset_x) / self.current_zoom
+        pdf_y = (event.y - self.img_offset_y) / self.current_zoom
+        
+        if self.ann_mode == "pen":
+            self.last_x, self.last_y = event.x, event.y
+            self.current_draw_path = [(pdf_x, pdf_y)]
+        elif self.ann_mode == "text":
+            self.add_text_annotation(event.x, event.y, pdf_x, pdf_y)
+
+    def on_canvas_drag(self, event):
+        if self.ann_mode == "pen" and self.last_x is not None:
+            self.canvas.create_line(self.last_x, self.last_y, event.x, event.y, 
+                                    fill="blue", width=2, capstyle=tk.ROUND, smooth=True)
+            self.last_x, self.last_y = event.x, event.y
+            
+            pdf_x = (event.x - self.img_offset_x) / self.current_zoom
+            pdf_y = (event.y - self.img_offset_y) / self.current_zoom
+            self.current_draw_path.append((pdf_x, pdf_y))
+
+    def on_canvas_release(self, event):
+        if self.ann_mode == "pen" and self.current_draw_path:
+            idx = self.selected_thumbnail.current_pos
+            self.page_order[idx]['annotations'].append({
+                'type': 'pen',
+                'points': self.current_draw_path
+            })
+            self.current_draw_path = []
+            self.last_x, self.last_y = None, None
+
+    def add_text_annotation(self, cx, cy, px, py):
+        # Create a simple entry popup
+        popup = tk.Toplevel(self.root)
+        popup.title("Enter Text")
+        popup.geometry(f"+{self.root.winfo_pointerx()}+{self.root.winfo_pointery()}")
+        
+        entry = ctk.CTkEntry(popup, width=200)
+        entry.pack(padx=10, pady=10)
+        entry.focus()
+        
+        def save_text(e=None):
+            text = entry.get()
+            if text:
+                idx = self.selected_thumbnail.current_pos
+                self.page_order[idx]['annotations'].append({
+                    'type': 'text',
+                    'pos': (px, py),
+                    'content': text
+                })
+                self.on_thumbnail_click(self.selected_thumbnail) # Refresh view
+            popup.destroy()
+            
+        entry.bind("<Return>", save_text)
+        ctk.CTkButton(popup, text="OK", command=save_text).pack(pady=5)
 
     def on_note_change(self, event=None):
         if not self.note_text.edit_modified():
@@ -364,14 +518,25 @@ class PDFMergerApp:
             self.selected_thumbnail.set_status(bool(self.page_order[idx]['note']), marked)
 
     def on_thumbnail_drag(self, thumb_frame, event):
-        # Calculate cursor position relative to the scroll_frame's canvas
-        canvas = self.scroll_frame._parent_canvas
-        x = canvas.winfo_pointerx() - canvas.winfo_rootx()
-        y = canvas.winfo_pointery() - canvas.winfo_rooty()
+        # Calculate cursor position relative to the scroll_frame
+        y = event.y_root - self.scroll_frame.winfo_rooty()
         
-        # Simple visual feedback: highlight potential target
-        # For real DND we would move the widget, but for now let's use buttons or a simpler swap.
-        pass
+        # Determine the target index based on vertical position
+        # Each item is roughly 120px high (thumbnail + padding)
+        target_idx = max(0, min(len(self.page_order) - 1, y // 120))
+        
+        if target_idx != thumb_frame.current_pos:
+            # Reorder in data
+            old_idx = thumb_frame.current_pos
+            item = self.page_order.pop(old_idx)
+            self.page_order.insert(target_idx, item)
+            
+            self.refresh_grid()
+            # Reselect to keep focus
+            for widget in self.scroll_frame.winfo_children():
+                if isinstance(widget, PageThumbnail) and widget.current_pos == target_idx:
+                    self.on_thumbnail_click(widget)
+                    break
 
     def move_page(self, direction):
         if not self.selected_thumbnail:
@@ -434,14 +599,28 @@ class PDFMergerApp:
             out_doc = fitz.open()
             for page_info in self.page_order:
                 src_doc = fitz.open(page_info['file'])
-                out_doc.insert_pdf(src_doc, from_page=page_info['index'], to_page=page_info['index'])
+                # Create a temporary single-page doc to apply annotations
+                temp_page_doc = fitz.open()
+                temp_page_doc.insert_pdf(src_doc, from_page=page_info['index'], to_page=page_info['index'])
+                page = temp_page_doc[0]
                 
-                # If there's a note, we could optionally add it as an annotation here
-                if page_info['note']:
-                    last_page = out_doc[-1]
-                    last_page.add_text_annot((10, 10), page_info['note'])
+                # Apply annotations
+                ink_list = []
+                for ann in page_info['annotations']:
+                    if ann['type'] == 'pen':
+                        ink_list.append(ann['points'])
+                    elif ann['type'] == 'text':
+                        page.insert_text(ann['pos'], ann['content'], color=(1, 0, 0), fontsize=14)
                 
+                if ink_list:
+                    page.add_ink_annot(ink_list)
+                
+                # Merge into final doc
+                out_doc.insert_pdf(temp_page_doc)
+                
+                # Cleanup
                 src_doc.close()
+                temp_page_doc.close()
 
             out_doc.save(save_path)
             out_doc.close()
