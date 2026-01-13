@@ -19,6 +19,10 @@ from PIL import Image, ImageTk
 import os
 import json
 import shutil
+import zipfile
+import xml.etree.ElementTree as ET
+import tempfile
+from pathlib import Path
 
 # Set appearance and color theme
 ctk.set_appearance_mode("Dark")
@@ -73,8 +77,19 @@ class PDFMergerApp:
         self.page_order = [] # List of dicts: {'file': path, 'index': idx, 'note': '', 'marked': False}
         self.thumbnails = {} # Cache for thumbnails: (path, idx) -> CTkImage
         self.selected_thumbnail = None
+        self.temp_dirs = [] # Track temp dirs for cleanup
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         self.create_widgets()
+
+    def on_closing(self):
+        """Cleanup and close"""
+        for temp_dir in self.temp_dirs:
+            try:
+                shutil.rmtree(temp_dir)
+            except:
+                pass
+        self.root.destroy()
 
     def create_widgets(self):
         # Configure grid
@@ -137,7 +152,12 @@ class PDFMergerApp:
         self.mark_check.pack(pady=10)
 
     def add_files(self):
-        files = filedialog.askopenfilenames(filetypes=[("PDF files", "*.pdf")])
+        files = filedialog.askopenfilenames(filetypes=[
+            ("PDF and forScore files", "*.pdf *.4ss"),
+            ("PDF files", "*.pdf"),
+            ("forScore files", "*.4ss"),
+            ("All files", "*.*")
+        ])
         if files:
             self.process_files(files)
 
@@ -148,11 +168,84 @@ class PDFMergerApp:
     def process_files(self, files):
         for f in files:
             f = f.strip('{}')
-            if f.lower().endswith('.pdf') and os.path.isfile(f):
+            if not os.path.isfile(f):
+                continue
+                
+            if f.lower().endswith('.pdf'):
                 if f not in self.pdf_files:
                     self.pdf_files.append(f)
                     self.load_pdf_pages(f)
+            elif f.lower().endswith('.4ss'):
+                self.handle_4ss(f)
         self.refresh_grid()
+
+    def handle_4ss(self, file_path):
+        """Handle forScore setlist files (.4ss)"""
+        try:
+            if zipfile.is_zipfile(file_path):
+                # It's a bundle (ZIP)
+                temp_dir = tempfile.mkdtemp(prefix="forscore_")
+                self.temp_dirs.append(temp_dir)
+                
+                with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                    zip_ref.extractall(temp_dir)
+                
+                # Look for XML file in bundle
+                xml_files = list(Path(temp_dir).glob("*.xml"))
+                if xml_files:
+                    self.parse_forscore_xml(xml_files[0], temp_dir)
+                else:
+                    # No XML? Just add all PDFs found in bundle
+                    bundle_pdfs = list(Path(temp_dir).glob("**/*.pdf"))
+                    for pdf in bundle_pdfs:
+                        pdf_str = str(pdf)
+                        if pdf_str not in self.pdf_files:
+                            self.pdf_files.append(pdf_str)
+                            self.load_pdf_pages(pdf_str)
+            else:
+                # Assume it's a plain XML file
+                self.parse_forscore_xml(file_path, os.path.dirname(file_path))
+                
+        except Exception as e:
+            messagebox.showerror("forScore Error", f"Failed to process .4ss file:\n{e}")
+
+    def parse_forscore_xml(self, xml_path, base_dir):
+        """Parse forScore XML setlist and load referenced PDFs"""
+        try:
+            tree = ET.parse(xml_path)
+            root = tree.getroot()
+            
+            if root.tag != 'forScore':
+                raise ValueError("Invalid forScore XML format")
+            
+            setlist_title = root.get('title', 'Untitled Setlist')
+            
+            # Scores are referenced by 'path' attribute
+            for item in root:
+                if item.tag == 'score':
+                    pdf_filename = item.get('path')
+                    if pdf_filename:
+                        # Try to find the PDF in base_dir
+                        full_path = os.path.join(base_dir, pdf_filename)
+                        if os.path.isfile(full_path):
+                            if full_path not in self.pdf_files:
+                                self.pdf_files.append(full_path)
+                                self.load_pdf_pages(full_path)
+                        else:
+                            print(f"Referenced PDF not found: {full_path}")
+                elif item.tag == 'bookmark':
+                    # bookmarks also have a 'path' (parent score) and 'title'
+                    pdf_filename = item.get('path')
+                    # For now, we load the whole score if a bookmark is referenced
+                    # In a more advanced version, we could crop to specific pages
+                    if pdf_filename:
+                        full_path = os.path.join(base_dir, pdf_filename)
+                        if os.path.isfile(full_path) and full_path not in self.pdf_files:
+                            self.pdf_files.append(full_path)
+                            self.load_pdf_pages(full_path)
+
+        except Exception as e:
+            raise Exception(f"Error parsing XML: {e}")
 
     def load_pdf_pages(self, file_path):
         try:
