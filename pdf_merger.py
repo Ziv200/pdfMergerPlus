@@ -99,12 +99,12 @@ class PDFMergerApp:
         # Sidebar
         self.sidebar = ctk.CTkFrame(self.root, width=200, corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
-        self.sidebar.grid_rowconfigure(6, weight=1)
+        self.sidebar.grid_rowconfigure(8, weight=1)
 
         self.logo_label = ctk.CTkLabel(self.sidebar, text="PDF MERGER", font=ctk.CTkFont(size=20, weight="bold"))
         self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
 
-        self.add_btn = ctk.CTkButton(self.sidebar, text="Add PDF Files", command=self.add_files)
+        self.add_btn = ctk.CTkButton(self.sidebar, text="Add Files", command=self.add_files)
         self.add_btn.grid(row=1, column=0, padx=20, pady=10)
 
         self.clear_btn = ctk.CTkButton(self.sidebar, text="Clear All", fg_color="transparent", border_width=2, command=self.clear_all)
@@ -115,18 +115,29 @@ class PDFMergerApp:
 
         self.load_proj_btn = ctk.CTkButton(self.sidebar, text="Load Project", command=self.load_project)
         self.load_proj_btn.grid(row=4, column=0, padx=20, pady=10)
+        
+        self.reorder_label = ctk.CTkLabel(self.sidebar, text="Rearrange Selected", font=ctk.CTkFont(size=12))
+        self.reorder_label.grid(row=5, column=0, padx=20, pady=(10, 0))
+        
+        self.move_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        self.move_frame.grid(row=6, column=0, padx=20, pady=5)
+        
+        self.up_btn = ctk.CTkButton(self.move_frame, text="←", width=60, command=lambda: self.move_page(-1))
+        self.up_btn.pack(side="left", padx=2)
+        
+        self.down_btn = ctk.CTkButton(self.move_frame, text="→", width=60, command=lambda: self.move_page(1))
+        self.down_btn.pack(side="left", padx=2)
 
         self.export_btn = ctk.CTkButton(self.sidebar, text="Export Merged PDF", fg_color="#28a745", hover_color="#218838", command=self.export_pdf)
-        self.export_btn.grid(row=5, column=0, padx=20, pady=10)
+        self.export_btn.grid(row=7, column=0, padx=20, pady=20)
 
-        # Main Content area
+        # Main Content area (Scrollable Thumbnail Grid)
         self.main_frame = ctk.CTkFrame(self.root)
         self.main_frame.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(0, weight=1)
 
-        # Scrollable Frame for Thumbnails
-        self.scroll_frame = ctk.CTkScrollableFrame(self.main_frame, label_text="Pages (Drag to reorder)")
+        self.scroll_frame = ctk.CTkScrollableFrame(self.main_frame, label_text="Pages (Select and use arrows to reorder)")
         self.scroll_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         
         # Registration for drag and drop (files)
@@ -145,6 +156,8 @@ class PDFMergerApp:
 
         self.note_text = ctk.CTkTextbox(self.detail_panel, height=100)
         self.note_text.pack(fill="x", padx=10, pady=5)
+        # Note: <<Modified>> binding can be tricky with delete/insert. 
+        # For simplicity, we'll keep it or move to a more robust update mechanism later.
         self.note_text.bind("<<Modified>>", self.on_note_change)
 
         self.mark_var = tk.BooleanVar()
@@ -325,16 +338,23 @@ class PDFMergerApp:
             self.preview_label.configure(image=None, text="Error loading preview")
 
         # Set note and mark
+        self.note_text.edit_modified(False) # Reset before loading
         self.note_text.delete("1.0", tk.END)
         self.note_text.insert("1.0", page_info['note'])
+        self.note_text.edit_modified(False) # Reset after loading
         self.mark_var.set(page_info['marked'])
 
     def on_note_change(self, event=None):
+        if not self.note_text.edit_modified():
+            return
+            
         if self.selected_thumbnail:
             idx = self.selected_thumbnail.current_pos
             note = self.note_text.get("1.0", tk.END).strip()
             self.page_order[idx]['note'] = note
             self.selected_thumbnail.set_status(bool(note), self.page_order[idx]['marked'])
+        
+        self.note_text.edit_modified(False)
 
     def on_mark_toggle(self):
         if self.selected_thumbnail:
@@ -369,48 +389,6 @@ class PDFMergerApp:
                 if isinstance(widget, PageThumbnail) and widget.current_pos == new_idx:
                     self.on_thumbnail_click(widget)
                     break
-
-    def create_widgets(self):
-        # ... (previous code)
-        self.root.grid_columnconfigure(1, weight=1)
-        self.root.grid_rowconfigure(0, weight=1)
-
-        # Sidebar
-        self.sidebar = ctk.CTkFrame(self.root, width=200, corner_radius=0)
-        self.sidebar.grid(row=0, column=0, sticky="nsew")
-        self.sidebar.grid_rowconfigure(8, weight=1)
-
-        self.logo_label = ctk.CTkLabel(self.sidebar, text="PDF MERGER", font=ctk.CTkFont(size=20, weight="bold"))
-        self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
-
-        self.add_btn = ctk.CTkButton(self.sidebar, text="Add PDF Files", command=self.add_files)
-        self.add_btn.grid(row=1, column=0, padx=20, pady=10)
-
-        self.clear_btn = ctk.CTkButton(self.sidebar, text="Clear All", fg_color="transparent", border_width=2, command=self.clear_all)
-        self.clear_btn.grid(row=2, column=0, padx=20, pady=10)
-
-        self.save_proj_btn = ctk.CTkButton(self.sidebar, text="Save Project", command=self.save_project)
-        self.save_proj_btn.grid(row=3, column=0, padx=20, pady=10)
-
-        self.load_proj_btn = ctk.CTkButton(self.sidebar, text="Load Project", command=self.load_project)
-        self.load_proj_btn.grid(row=4, column=0, padx=20, pady=10)
-        
-        self.reorder_label = ctk.CTkLabel(self.sidebar, text="Rearrange Selected", font=ctk.CTkFont(size=12))
-        self.reorder_label.grid(row=5, column=0, padx=20, pady=(10, 0))
-        
-        self.move_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        self.move_frame.grid(row=6, column=0, padx=20, pady=5)
-        
-        self.up_btn = ctk.CTkButton(self.move_frame, text="←", width=60, command=lambda: self.move_page(-1))
-        self.up_btn.pack(side="left", padx=2)
-        
-        self.down_btn = ctk.CTkButton(self.move_frame, text="→", width=60, command=lambda: self.move_page(1))
-        self.down_btn.pack(side="left", padx=2)
-
-        self.export_btn = ctk.CTkButton(self.sidebar, text="Export Merged PDF", fg_color="#28a745", hover_color="#218838", command=self.export_pdf)
-        self.export_btn.grid(row=7, column=0, padx=20, pady=20)
-        
-        # ... (rest of the widgets)
 
     def clear_all(self):
         if messagebox.askyesno("Clear All", "Are you sure you want to clear all files?"):
